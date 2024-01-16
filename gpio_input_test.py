@@ -1,7 +1,7 @@
 import Adafruit_ADS1x15
 import time
 
-# Créer une instance ADS1115
+# Crée une instance ADS1115
 adc = Adafruit_ADS1x15.ADS1115(busnum=1)
 
 # Choisi un gain approprié
