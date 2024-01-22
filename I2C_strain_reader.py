@@ -40,6 +40,8 @@ def initialize_ads_devices(tcas_with_addresses):
 
                     my_ads = ADS.ADS1115(tca[channel])
                     ads_devices.append({
+                        "tca_address": address,  # Include TCA address
+                        "channel": channel,      # Include channel
                         "device": my_ads,
                         "voltage_pair_1": AnalogIn(my_ads, ADS.P2, ADS.P3),
                         "voltage_pair_2": AnalogIn(my_ads, ADS.P0, ADS.P1),
@@ -58,19 +60,35 @@ def read_strain_gauges(ads_devices):
             ads["device"].gain = 1
             v = ads["voltage_pair_2"].voltage
             strain = dv / v * 1e6 * 4 / 2.1
-            strain_values.append((dv, v, strain))
+            strain_values.append((dv, v, strain, ads["tca_address"], ads["channel"]))
         except Exception as e:
             logging.error(f"Erreur lors de la lecture du capteur : {e}")
-            strain_values.append((None, None, None))
+            strain_values.append((None, None, None, ads["tca_address"], ads["channel"]))
     return strain_values
 
+
+previous_strains = {}  # Dictionary to store previous strain values
+
 def print_strain_values(strain_values):
-    """Affiche les valeurs de contrainte."""
-    for dv, v, strain in strain_values:
+    """Affiche les valeurs de contrainte avec des couleurs."""
+    global previous_strains
+    RED = "\033[31m"    # ANSI code pour rouge
+    GREEN = "\033[32m"  # ANSI code pour vert
+    RESET = "\033[0m"   # ANSI code pour reset
+
+    for dv, v, strain, tca_address, channel in strain_values:
+        color = RED if tca_address == TCA_ADDRESSES[0] else GREEN
         if dv is not None:
-            logging.info(f"{dv:>5}\t{v:>5.3f}\t{strain:>5.3f}")
+            previous_strain = previous_strains.get((tca_address, channel), (None, None, None))
+            diff = strain - previous_strain[2] if previous_strain[2] is not None else 0
+            message = f"TCA {hex(tca_address)} Channel {channel:1}: {dv:12.6f}\t{v:8.3f}\t{strain:10.3f}\tdiff: {diff:10.3f}"
+            logging.info(color + message + RESET)
+            previous_strains[(tca_address, channel)] = (dv, v, strain)
         else:
-            logging.error("Erreur de lecture du capteur")
+            logging.error(color + "Erreur de lecture du capteur" + RESET)
+
+
+
 
 def main():
     initialize_logging()
@@ -81,7 +99,7 @@ def main():
         ads_devices = initialize_ads_devices(tcas_with_addresses)
 
         while True:
-            strain_values = read_strain_gauges(ads_devices)
+            strain_values = read_strain_gauges(ads_devices) 
             print_strain_values(strain_values)
             time.sleep(INTERVAL)
 
@@ -89,6 +107,7 @@ def main():
         logging.info("Programme terminé par l'utilisateur.")
     except Exception as e:
         logging.error(f"Erreur inattendue : {e}")
+
 
 if __name__ == "__main__":
     main()
