@@ -72,9 +72,6 @@ def read_strain_gauges(ads_devices):
         strain_values.append((dv, v, strain, ads["tca_address"], ads["channel"]) if dv is not None else (None, None, None, ads["tca_address"], ads["channel"]))
     return strain_values
 
-
-#previous_strains = {}  # Dictionaire pour stock les valeurs précédente de strains
-
 def get_color_code(tca_address):
     """Renvoie le code couleur ANSI basé sur l'adresse TCA"""
     RED = "\033[31m"
@@ -82,12 +79,18 @@ def get_color_code(tca_address):
     GREEN = "\033[32m"
     return RED if tca_address == TCA_ADDRESSES[0] else BLUE if tca_address == TCA_ADDRESSES[1] else GREEN
 
-def print_strain_values(average_values, tca_address, channel):
-    """Print les valeurs de déformation moyennes avec un code couleur"""
+def print_strain_values(average_values, tca_address, channel, previous_strains):
+    """Print les valeurs de déformation moyennes avec un code couleur et la différence avec la valeur précédente."""
     RESET = "\033[0m"
     color = get_color_code(tca_address)
     average_dv, average_v, average_strain = average_values
-    message = f"TCA {hex(tca_address)} Channel {channel}: Average DV: {average_dv:.6f}, V: {average_v:.3f}, Strain: {average_strain:.3f}"
+
+    # Calcule la différence avec la valeur précédente
+    previous_strain = previous_strains.get((tca_address, channel), (None, None, None))
+    diff = average_strain - previous_strain[2] if previous_strain[2] is not None else 0
+    previous_strains[(tca_address, channel)] = average_values
+
+    message = f"TCA {hex(tca_address)} Channel {channel}: Average DV: {average_dv:.6f}, V: {average_v:.3f}, Strain: {average_strain:.3f} diff : {diff:.3f}"
     logging.info(color + message + RESET)
 
 def collect_readings(ads_device):
@@ -108,6 +111,7 @@ def calculate_average(readings):
 
 def main():
     initialize_logging()
+    previous_strains = {}  # Dictionaire pour stock les valeurs précédente de strains
 
     try:
         i2c = board.I2C()
@@ -118,7 +122,7 @@ def main():
             for ads in ads_devices:
                 readings = collect_readings(ads)
                 average_values = calculate_average(readings)
-                print_strain_values(average_values, ads["tca_address"], ads["channel"])
+                print_strain_values(average_values, ads["tca_address"], ads["channel"], previous_strains)
 
             time.sleep(INTERVAL)
 
