@@ -6,9 +6,10 @@ import adafruit_tca9548a
 import logging
 
 # Constantes
-TCA_ADDRESSES = [0x70, 0x72]  # Il suffit d'ajouter l'adresse des TCAs supplémentaires
+TCA_ADDRESSES = [0x70,0x71,0x72]  # Il suffit d'ajouter l'adresse des TCAs supplémentaires
 INTERVAL = 5  # Intervalle de capture en sec
 LOG_FORMAT = "%(levelname)s:%(asctime)s:%(message)s"
+NUM_READINGS = 50 #Nombre de readings pour faire une moyenne (bruit)
 
 def initialize_logging():
     """Initialise le framework de logs."""
@@ -40,8 +41,8 @@ def initialize_ads_devices(tcas_with_addresses):
 
                     my_ads = ADS.ADS1115(tca[channel])
                     ads_devices.append({
-                        "tca_address": address,  # Include TCA address
-                        "channel": channel,      # Include channel
+                        "tca_address": address,  
+                        "channel": channel,     
                         "device": my_ads,
                         "voltage_pair_1": AnalogIn(my_ads, ADS.P2, ADS.P3),
                         "voltage_pair_2": AnalogIn(my_ads, ADS.P0, ADS.P1),
@@ -50,64 +51,81 @@ def initialize_ads_devices(tcas_with_addresses):
                 logging.error(f"Erreur lors du balayage de TCA {hex(address)} Canal {channel} : {e}")
     return ads_devices
 
+def read_strain(ads_device):
+    """Lit et calcule la déformation à partir d’un ADS."""
+    try:
+        ads_device["device"].gain = 16
+        dv = ads_device["voltage_pair_1"].voltage
+        ads_device["device"].gain = 1
+        v = ads_device["voltage_pair_2"].voltage
+        strain = dv / v * 1e6 * 4 / 2.1
+        return dv, v, strain
+    except Exception as e:
+        logging.error(f"Erreur lors de la lecture du capteur: {e}")
+        return None, None, None
+
 def read_strain_gauges(ads_devices):
-    """Lit les valeurs de contrainte des capteurs."""
+    """Lit les valeurs de contrainte des capteurs"""
     strain_values = []
     for ads in ads_devices:
-        try:
-            ads["device"].gain = 16
-            dv = ads["voltage_pair_1"].voltage
-            ads["device"].gain = 1
-            v = ads["voltage_pair_2"].voltage
-            strain = dv / v * 1e6 * 4 / 2.1
-            strain_values.append((dv, v, strain, ads["tca_address"], ads["channel"]))
-        except Exception as e:
-            logging.error(f"Erreur lors de la lecture du capteur : {e}")
-            strain_values.append((None, None, None, ads["tca_address"], ads["channel"]))
+        dv, v, strain = read_strain(ads)
+        strain_values.append((dv, v, strain, ads["tca_address"], ads["channel"]) if dv is not None else (None, None, None, ads["tca_address"], ads["channel"]))
     return strain_values
 
 
-previous_strains = {}  # Dictionary to store previous strain values
+#previous_strains = {}  # Dictionaire pour stock les valeurs précédente de strains
 
-def print_strain_values(strain_values):
-    """Affiche les valeurs de contrainte avec des couleurs."""
-    global previous_strains
-    RED = "\033[31m"    # ANSI code pour rouge
-    GREEN = "\033[32m"  # ANSI code pour vert
-    RESET = "\033[0m"   # ANSI code pour reset
+def get_color_code(tca_address):
+    """Renvoie le code couleur ANSI basé sur l'adresse TCA"""
+    RED = "\033[31m"
+    BLUE = "\033[34m"
+    GREEN = "\033[32m"
+    return RED if tca_address == TCA_ADDRESSES[0] else BLUE if tca_address == TCA_ADDRESSES[1] else GREEN
 
-    for dv, v, strain, tca_address, channel in strain_values:
-        color = RED if tca_address == TCA_ADDRESSES[0] else GREEN
+def print_strain_values(average_values, tca_address, channel):
+    """Print les valeurs de déformation moyennes avec un code couleur"""
+    RESET = "\033[0m"
+    color = get_color_code(tca_address)
+    average_dv, average_v, average_strain = average_values
+    message = f"TCA {hex(tca_address)} Channel {channel}: Average DV: {average_dv:.6f}, V: {average_v:.3f}, Strain: {average_strain:.3f}"
+    logging.info(color + message + RESET)
+
+def collect_readings(ads_device):
+    """Collecte plusieurs lectures à partir d’un ADS"""
+    readings = []
+    for _ in range(NUM_READINGS):
+        dv, v, strain = read_strain(ads_device)
         if dv is not None:
-            previous_strain = previous_strains.get((tca_address, channel), (None, None, None))
-            diff = strain - previous_strain[2] if previous_strain[2] is not None else 0
-            message = f"TCA {hex(tca_address)} Channel {channel:1}: {dv:12.6f}\t{v:8.3f}\t{strain:10.3f}\tdiff: {diff:10.3f}"
-            logging.info(color + message + RESET)
-            previous_strains[(tca_address, channel)] = (dv, v, strain)
-        else:
-            logging.error(color + "Erreur de lecture du capteur" + RESET)
+            readings.append((dv, v, strain))
+    return readings
 
-
-
+def calculate_average(readings):
+    """Calcule la moyenne des lectures"""
+    average_dv = sum(dv for dv, _, _ in readings) / len(readings)
+    average_v = sum(v for _, v, _ in readings) / len(readings)
+    average_strain = sum(strain for _, _, strain in readings) / len(readings)
+    return average_dv, average_v, average_strain
 
 def main():
     initialize_logging()
 
     try:
-        i2c = board.I2C()  # Initialisation de l'I2C
+        i2c = board.I2C()
         tcas_with_addresses = initialize_tcas(i2c, TCA_ADDRESSES)
         ads_devices = initialize_ads_devices(tcas_with_addresses)
 
         while True:
-            strain_values = read_strain_gauges(ads_devices) 
-            print_strain_values(strain_values)
+            for ads in ads_devices:
+                readings = collect_readings(ads)
+                average_values = calculate_average(readings)
+                print_strain_values(average_values, ads["tca_address"], ads["channel"])
+
             time.sleep(INTERVAL)
 
     except KeyboardInterrupt:
         logging.info("Programme terminé par l'utilisateur.")
     except Exception as e:
-        logging.error(f"Erreur inattendue : {e}")
-
+        logging.error(f"Erreur inattendue: {e}")
 
 if __name__ == "__main__":
     main()
