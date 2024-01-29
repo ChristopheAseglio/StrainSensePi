@@ -5,6 +5,8 @@ from adafruit_ads1x15.analog_in import AnalogIn
 import adafruit_tca9548a
 import logging
 
+
+
 import paho.mqtt.client as mqtt
 import json
 import sqlite3
@@ -16,26 +18,41 @@ LOG_FORMAT = "%(levelname)s:%(asctime)s:%(message)s"
 NUM_READINGS = 50 #Nombre de readings pour faire une moyenne (bruit)
 
 # Constantes MQTT
-THINGSBOARD_HOST = ''
-ACCESS_TOKEN = ''
+THINGSBOARD_HOST = 'buildwise.digital'
+ACCESS_TOKEN = 'CHRISTOPHE'
+
+logger = logging.getLogger("thingsboard")
+logger.setLevel(logging.DEBUG)
 
 def initialize_mqtt_client():
     """Initialise et configure le client MQTT."""
     client = mqtt.Client()
     client.username_pw_set(ACCESS_TOKEN)
-    client.connect(THINGSBOARD_HOST, 1883, 60)
+    client.connect(THINGSBOARD_HOST, 1884, 60)
+
+    client.loop_start()
     return client
 
-def publish_to_cloud(client, sensor_data, db_path):
+def publish_to_cloud(client, sensor_data, db_path=''):
     """Publie les données de capteur sur ThingsBoard et sauvegarde dans SQLite en cas d'échec."""
     try:
-        result = client.publish('v1/devices/me/telemetry', json.dumps(sensor_data), 1)
+        #sensor_data = {'data' : 0.0}
+        mydict = {}
+        for k1,v1 in sensor_data.items():
+            for k2,v2 in v1.items():
+                mydict[k1+'-' + k2] =v2
+
+        jdumps = json.dumps(mydict)
+        print(jdumps)
+
+        result = client.publish('v1/devices/me/telemetry',jdumps , 1)
+        print(result)
         if result.rc != mqtt.MQTT_ERR_SUCCESS:
             raise Exception(f"Échec de la publication MQTT avec le code d'erreur {result.rc}")
-        logging.info("Données publiées avec succès.")
+        logger.info("Données publiées avec succès.")
     except Exception as e:
-        logging.error(f"Erreur lors de la publication des données: {e}")
-        save_to_sqlite(db_path, sensor_data)
+        logger.error(f"Erreur lors de la publication des données: {e}")
+        #save_to_sqlite(db_path, sensor_data)
 
 def save_to_sqlite(db_path, sensor_data):
     try:
@@ -46,13 +63,13 @@ def save_to_sqlite(db_path, sensor_data):
                            (key.split('_')[0], int(key.split('_')[1][2]), data['Average DV'], data['Average V'], data['Average Strain']))
         conn.commit()
     except Exception as e:
-        logging.error(f"Erreur lors de l'enregistrement dans SQLite : {e}")
+        logger.error(f"Erreur lors de l'enregistrement dans SQLite : {e}")
     finally:
         conn.close()
 
 def initialize_logging():
     """Initialise le framework de logs."""
-    logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
+    #logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
 
 def initialize_tcas(i2c, addresses):
     """Initialise les dispositifs TCA et les retourne avec leurs adresses."""
@@ -61,9 +78,9 @@ def initialize_tcas(i2c, addresses):
         try:
             tca = adafruit_tca9548a.TCA9548A(i2c, address=address)
             tcas.append((tca, address))
-            logging.info(f"Initialisation de TCA à l'adresse : {hex(address)}")
+            logger.info(f"Initialisation de TCA à l'adresse : {hex(address)}")
         except Exception as e:
-            logging.error(f"Erreur lors de l'initialisation de TCA à l'adresse {hex(address)} : {e}")
+            logger.error(f"Erreur lors de l'initialisation de TCA à l'adresse {hex(address)} : {e}")
     return tcas
 
 def initialize_ads_devices(tcas_with_addresses):
@@ -73,9 +90,9 @@ def initialize_ads_devices(tcas_with_addresses):
         for channel in range(4):
             try:
                 if tca[channel].try_lock():
-                    logging.info(f"Balayage de l'adresse TCA {hex(address)} Canal {channel}")
+                    logger.info(f"Balayage de l'adresse TCA {hex(address)} Canal {channel}")
                     addresses = tca[channel].scan()
-                    logging.info(f"Appareils trouvés : {[hex(addr) for addr in addresses if addr != address]}")
+                    logger.info(f"Appareils trouvés : {[hex(addr) for addr in addresses if addr != address]}")
                     tca[channel].unlock()
 
                     my_ads = ADS.ADS1115(tca[channel])
@@ -87,7 +104,7 @@ def initialize_ads_devices(tcas_with_addresses):
                         "voltage_pair_2": AnalogIn(my_ads, ADS.P0, ADS.P1),
                     })
             except Exception as e:
-                logging.error(f"Erreur lors du balayage de TCA {hex(address)} Canal {channel} : {e}")
+                logger.error(f"Erreur lors du balayage de TCA {hex(address)} Canal {channel} : {e}")
     return ads_devices
 
 def read_strain(ads_device):
@@ -100,7 +117,7 @@ def read_strain(ads_device):
         strain = dv / v * 1e6 * 4 / 2.1
         return dv, v, strain
     except Exception as e:
-        logging.error(f"Erreur lors de la lecture du capteur: {e}")
+        logger.error(f"Erreur lors de la lecture du capteur: {e}")
         return None, None, None
 
 def read_strain_gauges(ads_devices):
@@ -130,7 +147,7 @@ def print_strain_values(average_values, tca_address, channel, previous_strains):
     previous_strains[(tca_address, channel)] = average_values
 
     message = f"TCA {hex(tca_address)} Channel {channel}: Average DV: {average_dv:.6f}, V: {average_v:.3f}, Strain: {average_strain:.3f} diff : {diff:.3f}"
-    logging.info(color + message + RESET)
+    logger.info(color + message + RESET)
 
 def collect_readings(ads_device):
     """Collecte plusieurs lectures à partir d’un ADS"""
@@ -149,10 +166,11 @@ def calculate_average(readings):
     return average_dv, average_v, average_strain
 
 def main():
-    initialize_logging()
+    #initialize_logging()
+    logger.info('init done')
     previous_strains = {}
     mqtt_client = initialize_mqtt_client()
-    db_path = "MaBaseDeDonnees.db"  # Chemin vers la base de données SQLite
+    #db_path = "MaBaseDeDonnees.db"  # Chemin vers la base de données SQLite
 
     try:
         i2c = board.I2C()
@@ -172,11 +190,16 @@ def main():
                     'Average V': average_values[1],
                     'Average Strain': average_values[2]
                 }
+                logger.info(sensor_data)
 
-            publish_to_cloud(mqtt_client, sensor_data, db_path)
+            publish_to_cloud(mqtt_client, sensor_data)#, db_path)
             time.sleep(INTERVAL)
 
     except KeyboardInterrupt:
-        logging.info("Programme terminé par l'utilisateur.")
+        logger.error("Programme terminé par l'utilisateur.")
     except Exception as e:
-        logging.error(f"Erreur inattendue: {e}")
+        logger.error(f"Erreur inattendue: {e}")
+
+
+if __name__ == "__main__":
+    main()
