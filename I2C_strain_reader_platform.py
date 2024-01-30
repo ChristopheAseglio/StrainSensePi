@@ -5,11 +5,13 @@ from adafruit_ads1x15.analog_in import AnalogIn
 import adafruit_tca9548a
 import logging
 
-
-
 import paho.mqtt.client as mqtt
 import json
-import sqlite3
+#import sqlite3
+import os
+from dotenv import load_dotenv
+
+load_dotenv()  # charge les credentials à partir du .env
 
 # Constantes
 TCA_ADDRESSES = [0x70,0x71,0x72]  # Il suffit d'ajouter l'adresse des TCAs supplémentaires
@@ -18,8 +20,8 @@ LOG_FORMAT = "%(levelname)s:%(asctime)s:%(message)s"
 NUM_READINGS = 50 #Nombre de readings pour faire une moyenne (bruit)
 
 # Constantes MQTT
-THINGSBOARD_HOST = 'buildwise.digital'
-ACCESS_TOKEN = 'CHRISTOPHE'
+THINGSBOARD_HOST = os.getenv("THINGSBOARD_HOST")
+ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
 
 logger = logging.getLogger("thingsboard")
 logger.setLevel(logging.DEBUG)
@@ -29,7 +31,6 @@ def initialize_mqtt_client():
     client = mqtt.Client()
     client.username_pw_set(ACCESS_TOKEN)
     client.connect(THINGSBOARD_HOST, 1884, 60)
-
     client.loop_start()
     return client
 
