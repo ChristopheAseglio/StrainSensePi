@@ -17,7 +17,7 @@ load_dotenv()  # charge les credentials à partir du .env
 TCA_ADDRESSES = [0x70,0x71,0x72]  # Il suffit d'ajouter l'adresse des TCAs supplémentaires
 INTERVAL = 5  # Intervalle de capture en sec
 LOG_FORMAT = "%(levelname)s:%(asctime)s:%(message)s"
-NUM_READINGS = 50 #Nombre de readings pour faire une moyenne (bruit)
+NUM_READINGS = 100 #Nombre de readings pour faire une moyenne (bruit)
 
 # Constantes MQTT
 THINGSBOARD_HOST = os.getenv("THINGSBOARD_HOST")
@@ -34,39 +34,61 @@ def initialize_mqtt_client():
     client.loop_start()
     return client
 
-def publish_to_cloud(client, sensor_data, db_path=''):
+# def publish_to_cloud(client, sensor_data, db_path=''):
+#     """Publie les données de capteur sur ThingsBoard et sauvegarde dans SQLite en cas d'échec."""
+#     try:
+#         #sensor_data = {'data' : 0.0}
+#         mydict = {}
+#         for k1,v1 in sensor_data.items():
+#             for k2,v2 in v1.items():
+#                 mydict[k1+'-' + k2] =v2
+
+#         jdumps = json.dumps(mydict)
+#         print(jdumps)
+
+#         result = client.publish('v1/devices/me/telemetry',jdumps , 1)
+#         print(result)
+#         if result.rc != mqtt.MQTT_ERR_SUCCESS:
+#             raise Exception(f"Échec de la publication MQTT avec le code d'erreur {result.rc}")
+#         logger.info("Données publiées avec succès.")
+#     except Exception as e:
+#         logger.error(f"Erreur lors de la publication des données: {e}")
+#         #save_to_sqlite(db_path, sensor_data)
+
+def publish_to_cloud(client, sensor_data):#, db_path=''):
     """Publie les données de capteur sur ThingsBoard et sauvegarde dans SQLite en cas d'échec."""
     try:
-        #sensor_data = {'data' : 0.0}
-        mydict = {}
-        for k1,v1 in sensor_data.items():
-            for k2,v2 in v1.items():
-                mydict[k1+'-' + k2] =v2
+        formatted_data = {}
+        for tca_channel, values in sensor_data.items():
+            formatted_data.update({
+                f"{tca_channel}-{measure}": value 
+                for measure, value in values.items()
+            })
 
-        jdumps = json.dumps(mydict)
+        jdumps = json.dumps(formatted_data)
         print(jdumps)
 
-        result = client.publish('v1/devices/me/telemetry',jdumps , 1)
+        result = client.publish('v1/devices/me/telemetry', jdumps, 1)
         print(result)
         if result.rc != mqtt.MQTT_ERR_SUCCESS:
             raise Exception(f"Échec de la publication MQTT avec le code d'erreur {result.rc}")
         logger.info("Données publiées avec succès.")
     except Exception as e:
         logger.error(f"Erreur lors de la publication des données: {e}")
-        #save_to_sqlite(db_path, sensor_data)
 
-def save_to_sqlite(db_path, sensor_data):
-    try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        for key, data in sensor_data.items():
-            cursor.execute("INSERT INTO donnees_capteur (tca_address, channel, average_dv, average_v, average_strain) VALUES (?, ?, ?, ?, ?)", 
-                           (key.split('_')[0], int(key.split('_')[1][2]), data['Average DV'], data['Average V'], data['Average Strain']))
-        conn.commit()
-    except Exception as e:
-        logger.error(f"Erreur lors de l'enregistrement dans SQLite : {e}")
-    finally:
-        conn.close()
+
+# def save_to_sqlite(db_path, sensor_data):
+#     try:
+#         conn = sqlite3.connect(db_path)
+#         cursor = conn.cursor()
+#         for key, data in sensor_data.items():
+#             cursor.execute("INSERT INTO donnees_capteur (tca_address, channel, average_dv, average_v, average_strain) VALUES (?, ?, ?, ?, ?)", 
+#                            (key.split('_')[0], int(key.split('_')[1][2]), data['Average DV'], data['Average V'], data['Average Strain']))
+#         conn.commit()
+#     except Exception as e:
+#         logger.error(f"Erreur lors de l'enregistrement dans SQLite : {e}")
+#     finally:
+#         conn.close()
 
 def initialize_logging():
     """Initialise le framework de logs."""
