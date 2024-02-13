@@ -1,14 +1,15 @@
+import numpy as np
 import time
 import board
 import adafruit_ads1x15.ads1115 as ADS
 from adafruit_ads1x15.analog_in import AnalogIn
 import adafruit_tca9548a
 import logging
-
 import paho.mqtt.client as mqtt
 import json
 import os
 from dotenv import load_dotenv
+from scipy.ndimage import gaussian_filter1d
 
 load_dotenv()  # charge les credentials à partir du .env
 
@@ -16,7 +17,7 @@ logger = logging.getLogger("thingsboard")
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 # Constantes
-TCA_ADDRESSES = [0x70,0x71,0x72]  # Il suffit d'ajouter l'adresse des TCAs supplémentaires
+TCA_ADDRESSES = [0x70]#,0x71,0x72]  # Il suffit d'ajouter l'adresse des TCAs supplémentaires
 INTERVAL = 5  # Intervalle de capture en sec
 LOG_FORMAT = "%(levelname)s:%(asctime)s:%(message)s"
 NUM_READINGS = 100 #Nombre de readings pour faire une moyenne (bruit)
@@ -24,6 +25,19 @@ NUM_READINGS = 100 #Nombre de readings pour faire une moyenne (bruit)
 # Constantes MQTT
 THINGSBOARD_HOST = os.getenv("THINGSBOARD_HOST")
 ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
+
+def apply_gaussian_filter(readings, sigma=1):
+    # Convertit les lectures en un tableau numpy pour le traitement
+    dv_values = np.array([dv for dv, _, _ in readings])
+    v_values = np.array([v for _, v, _ in readings])
+    strain_values = np.array([strain for _, _, strain in readings])
+
+    # Applique le filtre gaussien pour lisser les données
+    smoothed_dv = gaussian_filter1d(dv_values, sigma=sigma)
+    smoothed_v = gaussian_filter1d(v_values, sigma=sigma)
+    smoothed_strain = gaussian_filter1d(strain_values, sigma=sigma)
+
+    return smoothed_dv, smoothed_v, smoothed_strain
 
 baseline_strains = {} # Pour stocker les mesures zéro
 
@@ -197,23 +211,30 @@ def main():
                 readings = collect_readings(ads)
                 average_values = calculate_average(readings)
 
-                # extrait la déformation moyenne depuis average_values
-                average_dv, average_v, average_strain = average_values
+                # Appliquer le filtre gaussien ici avec sigma^2 comme variance. sigma est l'écart-type, donc pour sigma^2 utilisez on utilise la racine carrée de la variance.
+                sigma_squared = 4  # variance sigma²
+                sigma = np.sqrt(sigma_squared)
+                smoothed_readings_dv, smoothed_readings_v, smoothed_readings_strain = apply_gaussian_filter(readings, sigma=sigma)
 
-                # ajuste la déformation moyenne en fonction de la mesure de base (mesure zéro)
-                adjusted_strain = adjust_for_baseline(average_strain, baseline_strains, ads["tca_address"], ads["channel"])
+                # Recalculez les moyennes après le lissage
+                average_dv_smoothed = np.mean(smoothed_readings_dv)
+                average_v_smoothed = np.mean(smoothed_readings_v)
+                average_strain_smoothed = np.mean(smoothed_readings_strain)
+
+                # Ajuste la déformation moyenne en fonction de la mesure de base (mesure zéro)
+                adjusted_strain = adjust_for_baseline(average_strain_smoothed, baseline_strains, ads["tca_address"], ads["channel"])
 
                 # On print les valeurs ajustées
-                print_strain_values((average_dv, average_v, adjusted_strain), ads["tca_address"], ads["channel"], previous_strains)
+                print_strain_values((average_dv_smoothed, average_v_smoothed, adjusted_strain), ads["tca_address"], ads["channel"], previous_strains)
                 
                 # Prépa des données pour l'envoi, avec la déformation ajustée
                 sensor_data[f"TCA{hex(ads['tca_address'])}_CH{ads['channel']}"] = {
-                    'Average DV': average_dv,
-                    'Average V': average_v,
+                    'Average DV': average_dv_smoothed,
+                    'Average V': average_v_smoothed,
                     'Average Strain': adjusted_strain  # Utilise la déformation ajustée ici
                 }
-                logger.info(sensor_data)
 
+            logger.info(sensor_data)
             # Publication des données ajustées
             publish_to_cloud(mqtt_client, sensor_data)
             time.sleep(INTERVAL)
