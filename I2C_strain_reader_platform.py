@@ -7,11 +7,13 @@ import logging
 
 import paho.mqtt.client as mqtt
 import json
-#import sqlite3
 import os
 from dotenv import load_dotenv
 
 load_dotenv()  # charge les credentials à partir du .env
+
+logger = logging.getLogger("thingsboard")
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 # Constantes
 TCA_ADDRESSES = [0x70,0x71,0x72]  # Il suffit d'ajouter l'adresse des TCAs supplémentaires
@@ -23,40 +25,41 @@ NUM_READINGS = 100 #Nombre de readings pour faire une moyenne (bruit)
 THINGSBOARD_HOST = os.getenv("THINGSBOARD_HOST")
 ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
 
-logger = logging.getLogger("thingsboard")
-logger.setLevel(logging.DEBUG)
+baseline_strains = {} # Pour stocker les mesures zéro
 
+# Capture des mesures initiales pour mesure zéro
+def capture_baseline(ads_devices):
+    global baseline_strains
+    print("Press space + enter to capture baseline measurements...")
+    input()
+    baseline_readings = {}
+    for ads in ads_devices:
+        readings = collect_readings(ads)
+        average_values = calculate_average(readings)  
+        key = f"TCA{hex(ads['tca_address'])}_CH{ads['channel']}"
+        #logger.debug(f"Clé pour baseline_readings : {key}, Valeur de Strain : {average_values[2]}") 
+        #logger.debug(f"Valeur directe de tca_address : {ads['tca_address']}")
+        baseline_readings[key] = average_values[2]  
+    return baseline_readings
+
+# Ajuste la mesure en fonction des valeurs de base
+def adjust_for_baseline(strain, baseline, tca_address, channel):
+    key = f"TCA{tca_address}_CH{channel}"
+    if key in baseline:
+        return strain - baseline[key]  
+    else:
+        return strain  
+
+# Config du client MQTT
 def initialize_mqtt_client():
-    """Initialise et configure le client MQTT."""
     client = mqtt.Client()
     client.username_pw_set(ACCESS_TOKEN)
     client.connect(THINGSBOARD_HOST, 1884, 60)
     client.loop_start()
     return client
 
-# def publish_to_cloud(client, sensor_data, db_path=''):
-#     """Publie les données de capteur sur ThingsBoard et sauvegarde dans SQLite en cas d'échec."""
-#     try:
-#         #sensor_data = {'data' : 0.0}
-#         mydict = {}
-#         for k1,v1 in sensor_data.items():
-#             for k2,v2 in v1.items():
-#                 mydict[k1+'-' + k2] =v2
-
-#         jdumps = json.dumps(mydict)
-#         print(jdumps)
-
-#         result = client.publish('v1/devices/me/telemetry',jdumps , 1)
-#         print(result)
-#         if result.rc != mqtt.MQTT_ERR_SUCCESS:
-#             raise Exception(f"Échec de la publication MQTT avec le code d'erreur {result.rc}")
-#         logger.info("Données publiées avec succès.")
-#     except Exception as e:
-#         logger.error(f"Erreur lors de la publication des données: {e}")
-#         #save_to_sqlite(db_path, sensor_data)
-
-def publish_to_cloud(client, sensor_data):#, db_path=''):
-    """Publie les données de capteur sur ThingsBoard et sauvegarde dans SQLite en cas d'échec."""
+# Publie les datas sur l'interface IoT
+def publish_to_cloud(client, sensor_data):
     try:
         formatted_data = {}
         for tca_channel, values in sensor_data.items():
@@ -68,6 +71,8 @@ def publish_to_cloud(client, sensor_data):#, db_path=''):
         jdumps = json.dumps(formatted_data)
         print(jdumps)
 
+         
+        logger.debug(f"Données formatées pour publication : {jdumps}")
         result = client.publish('v1/devices/me/telemetry', jdumps, 1)
         print(result)
         if result.rc != mqtt.MQTT_ERR_SUCCESS:
@@ -76,28 +81,11 @@ def publish_to_cloud(client, sensor_data):#, db_path=''):
     except Exception as e:
         logger.error(f"Erreur lors de la publication des données: {e}")
 
-
-# def save_to_sqlite(db_path, sensor_data):
-#     try:
-#         conn = sqlite3.connect(db_path)
-#         cursor = conn.cursor()
-#         for key, data in sensor_data.items():
-#             cursor.execute("INSERT INTO donnees_capteur (tca_address, channel, average_dv, average_v, average_strain) VALUES (?, ?, ?, ?, ?)", 
-#                            (key.split('_')[0], int(key.split('_')[1][2]), data['Average DV'], data['Average V'], data['Average Strain']))
-#         conn.commit()
-#     except Exception as e:
-#         logger.error(f"Erreur lors de l'enregistrement dans SQLite : {e}")
-#     finally:
-#         conn.close()
-
-def initialize_logging():
-    """Initialise le framework de logs."""
-    #logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
-
+# Initialise les TCA et retourne leurs instances
 def initialize_tcas(i2c, addresses):
-    """Initialise les dispositifs TCA et les retourne avec leurs adresses."""
     tcas = []
     for address in addresses:
+        #logger.debug(f"Début de l'initialisation de TCA avec l'adresse : {hex(address)}") 
         try:
             tca = adafruit_tca9548a.TCA9548A(i2c, address=address)
             tcas.append((tca, address))
@@ -106,12 +94,13 @@ def initialize_tcas(i2c, addresses):
             logger.error(f"Erreur lors de l'initialisation de TCA à l'adresse {hex(address)} : {e}")
     return tcas
 
+# Initialise les ADS pour chaque canal TCA
 def initialize_ads_devices(tcas_with_addresses):
-    """Initialise les dispositifs ADS pour chaque canal TCA."""
     ads_devices = []
     for tca, address in tcas_with_addresses:
         for channel in range(4):
             try:
+                #logger.debug(f"Création d'un ADS pour TCA à l'adresse : {hex(address)} sur le canal {channel}")
                 if tca[channel].try_lock():
                     logger.info(f"Balayage de l'adresse TCA {hex(address)} Canal {channel}")
                     addresses = tca[channel].scan()
@@ -130,8 +119,8 @@ def initialize_ads_devices(tcas_with_addresses):
                 logger.error(f"Erreur lors du balayage de TCA {hex(address)} Canal {channel} : {e}")
     return ads_devices
 
+#Lit et calcule la déformation à partir d’un ADS.
 def read_strain(ads_device):
-    """Lit et calcule la déformation à partir d’un ADS."""
     try:
         ads_device["device"].gain = 16
         dv = ads_device["voltage_pair_1"].voltage
@@ -143,27 +132,28 @@ def read_strain(ads_device):
         logger.error(f"Erreur lors de la lecture du capteur: {e}")
         return None, None, None
 
+# Lecture des strains
 def read_strain_gauges(ads_devices):
-    """Lit les valeurs de contrainte des capteurs"""
     strain_values = []
     for ads in ads_devices:
+        #logger.debug(f"Lecture de déformation pour TCA à l'adresse : {hex(ads['tca_address'])}, Canal : {ads['channel']}")
         dv, v, strain = read_strain(ads)
         strain_values.append((dv, v, strain, ads["tca_address"], ads["channel"]) if dv is not None else (None, None, None, ads["tca_address"], ads["channel"]))
     return strain_values
 
+# code couleur
 def get_color_code(tca_address):
-    """Renvoie le code couleur ANSI basé sur l'adresse TCA"""
     RED = "\033[31m"
     BLUE = "\033[34m"
     GREEN = "\033[32m"
     return RED if tca_address == TCA_ADDRESSES[0] else BLUE if tca_address == TCA_ADDRESSES[1] else GREEN
 
+# moyennes de déformation avec couleur
 def print_strain_values(average_values, tca_address, channel, previous_strains):
-    """Print les valeurs de déformation moyennes avec un code couleur et la différence avec la valeur précédente."""
     RESET = "\033[0m"
     color = get_color_code(tca_address)
     average_dv, average_v, average_strain = average_values
-
+ 
     # Calcule la différence avec la valeur précédente
     previous_strain = previous_strains.get((tca_address, channel), (None, None, None))
     diff = average_strain - previous_strain[2] if previous_strain[2] is not None else 0
@@ -172,8 +162,8 @@ def print_strain_values(average_values, tca_address, channel, previous_strains):
     message = f"TCA {hex(tca_address)} Channel {channel}: Average DV: {average_dv:.6f}, V: {average_v:.3f}, Strain: {average_strain:.3f} diff : {diff:.3f}"
     logger.info(color + message + RESET)
 
+# Collecte plusieurs readings à partir d’un ADS
 def collect_readings(ads_device):
-    """Collecte plusieurs lectures à partir d’un ADS"""
     readings = []
     for _ in range(NUM_READINGS):
         dv, v, strain = read_strain(ads_device)
@@ -181,48 +171,57 @@ def collect_readings(ads_device):
             readings.append((dv, v, strain))
     return readings
 
+# Calcule la moyenne des readings
 def calculate_average(readings):
-    """Calcule la moyenne des lectures"""
     average_dv = sum(dv for dv, _, _ in readings) / len(readings)
     average_v = sum(v for _, v, _ in readings) / len(readings)
     average_strain = sum(strain for _, _, strain in readings) / len(readings)
     return average_dv, average_v, average_strain
 
 def main():
-    #initialize_logging()
-    logger.info('init done')
+    logger.info('Initialisation terminée')
     previous_strains = {}
     mqtt_client = initialize_mqtt_client()
-    #db_path = "MaBaseDeDonnees.db"  # Chemin vers la base de données SQLite
 
     try:
         i2c = board.I2C()
         tcas_with_addresses = initialize_tcas(i2c, TCA_ADDRESSES)
         ads_devices = initialize_ads_devices(tcas_with_addresses)
+        
+        # Capture des mesures zéro
+        baseline_strains = capture_baseline(ads_devices)    
 
         while True:
             sensor_data = {}
-            for ads in ads_devices:
+            for ads in ads_devices: 
                 readings = collect_readings(ads)
                 average_values = calculate_average(readings)
-                print_strain_values(average_values, ads["tca_address"], ads["channel"], previous_strains)
+
+                # extrait la déformation moyenne depuis average_values
+                average_dv, average_v, average_strain = average_values
+
+                # ajuste la déformation moyenne en fonction de la mesure de base (mesure zéro)
+                adjusted_strain = adjust_for_baseline(average_strain, baseline_strains, ads["tca_address"], ads["channel"])
+
+                # On print les valeurs ajustées
+                print_strain_values((average_dv, average_v, adjusted_strain), ads["tca_address"], ads["channel"], previous_strains)
                 
-                # Préparation des données pour l'envoi
-                sensor_data[f"TCA{ads['tca_address']}_CH{ads['channel']}"] = {
-                    'Average DV': average_values[0],
-                    'Average V': average_values[1],
-                    'Average Strain': average_values[2]
+                # Prépa des données pour l'envoi, avec la déformation ajustée
+                sensor_data[f"TCA{hex(ads['tca_address'])}_CH{ads['channel']}"] = {
+                    'Average DV': average_dv,
+                    'Average V': average_v,
+                    'Average Strain': adjusted_strain  # Utilise la déformation ajustée ici
                 }
                 logger.info(sensor_data)
 
-            publish_to_cloud(mqtt_client, sensor_data)#, db_path)
+            # Publication des données ajustées
+            publish_to_cloud(mqtt_client, sensor_data)
             time.sleep(INTERVAL)
 
     except KeyboardInterrupt:
         logger.error("Programme terminé par l'utilisateur.")
     except Exception as e:
-        logger.error(f"Erreur inattendue: {e}")
-
+        logger.error(f"Erreur inattendue : {e}")
 
 if __name__ == "__main__":
     main()
