@@ -9,7 +9,6 @@ import paho.mqtt.client as mqtt
 import json
 import os
 from dotenv import load_dotenv
-#from scipy.ndimage import gaussian_filter1d
 
 load_dotenv()  # charge les credentials à partir du .env
 
@@ -17,7 +16,7 @@ logger = logging.getLogger("thingsboard")
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 # Constantes
-TCA_ADDRESSES = [0x70]#,0x71,0x72]  # Il suffit d'ajouter l'adresse des TCAs supplémentaires
+TCA_ADDRESSES = [0x70,0x71,0x72]  # Il suffit d'ajouter l'adresse des TCAs supplémentaires
 INTERVAL = 5  # Intervalle de capture en sec
 LOG_FORMAT = "%(levelname)s:%(asctime)s:%(message)s"
 NUM_READINGS = 100 #Nombre de readings pour faire une moyenne (bruit)
@@ -43,7 +42,7 @@ baseline_strains = {} # Pour stocker les mesures zéro
 # Capture des mesures initiales pour mesure zéro
 def capture_baseline(ads_devices):
     global baseline_strains
-    print("Press space + enter to capture baseline measurements...")
+    print("Appuyer sur espace + enter pour commencer à la mesure zéro")
     input()
     baseline_readings = {}
     for ads in ads_devices:
@@ -141,9 +140,11 @@ def read_strain(ads_device):
         v = ads_device["voltage_pair_2"].voltage
         strain = dv / v * 1e6 * 4 / 2.1
         return dv, v, strain
+    except IOError as e:
+        logger.error(f"Erreur de lecture du capteur : {e}")
     except Exception as e:
-        logger.error(f"Erreur lors de la lecture du capteur: {e}")
-        return None, None, None
+        logger.error(f"Erreur inattendue lors de la lecture du capteur : {e}")
+    return None, None, None  # Retourne None si une erreur est survenue
 
 # Lecture des strains
 def read_strain_gauges(ads_devices):
