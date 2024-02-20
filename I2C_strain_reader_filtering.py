@@ -16,11 +16,11 @@ logger = logging.getLogger("thingsboard")
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 # Constantes
-TCA_ADDRESSES = [0x70]#,0x71,0x72]  # Il suffit d'ajouter ou supprimer l'adresse des TCAs branchés
+TCA_ADDRESSES = [0x70,0x71,0x72]  # Il suffit d'ajouter ou supprimer l'adresse des TCAs branchés
 INTERVAL = 5  # Intervalle de capture en sec
 LOG_FORMAT = "%(levelname)s:%(asctime)s:%(message)s"
 NUM_READINGS = 100 #Nombre de readings pour faire une moyenne (bruit)
-MAX_DIFF_THRESHOLD = 500  # Différence max autorisée dans les strains sur 2 lectures consécutives (On élimine les valeurs out-of-range)
+MAX_DIFF_THRESHOLD = 1500  # Différence max autorisée dans les strains sur 2 lectures consécutives (On élimine les valeurs out-of-range)
 
 # Constantes MQTT
 THINGSBOARD_HOST = os.getenv("THINGSBOARD_HOST")
@@ -161,46 +161,6 @@ def read_strain_with_retry(ads_device, previous_strains, max_retries=5, threshol
     logger.error(f"Failed to read valid strain from {tca_address} channel {channel} after {max_retries} attempts.")
     return previous_strain if previous_strain else (None, None, None)
 
-
-# # lit les strains et crée une nouvelle tentative (max 5 fois) de lecure en fonction du seuil MAX_DIFF_THRESHOLD
-# def read_strain_with_retry(ads_device, previous_strains, max_retries=5, threshold=MAX_DIFF_THRESHOLD):
-#     current_try = 0
-#     tca_address, channel = ads_device["tca_address"], ads_device["channel"]
-#     previous_strain = previous_strains.get((tca_address, channel), None)
-
-#     while current_try < max_retries:
-#         try:
-#             ads_device["device"].gain = 16
-#             dv = ads_device["voltage_pair_1"].voltage
-#             ads_device["device"].gain = 1
-#             v = ads_device["voltage_pair_2"].voltage
-#             strain = dv / v * 1e6 * 4 / 2.1
-
-#             if previous_strain is not None:
-#                 diff = abs(strain - previous_strain[2])
-#                 if diff <= threshold:
-#                     previous_strains[(tca_address, channel)] = (dv, v, strain)
-#                     return dv, v, strain
-#                 else:
-#                     logger.info(f"Strain difference exceeded threshold ({diff:.3f} > {threshold}), retrying...")
-#             else:
-#                 previous_strains[(tca_address, channel)] = (dv, v, strain)
-#                 return dv, v, strain
-
-#         except Exception as e:
-#             logger.error(f"Error reading sensor, attempt {current_try + 1}: {e}")
-#             if "Remote I/O error" in str(e):
-#                 # Handle specific I/O error logic here if needed
-#                 pass
-
-#         current_try += 1
-#         time.sleep(1)  # Temps en sec avant la nouvelle tentative
-
-#     # Après le nombre maximal de tentatives, renvoie la dernière bonne valeur connue ou gère l'erreur
-#     logger.error(f"Failed to read valid strain after {max_retries} attempts.")
-#     return previous_strain if previous_strain else (None, None, None)
-
-#Lit et calcule la déformation à partir d’un ADS.
 def read_strain(ads_device):
     try:
         ads_device["device"].gain = 16

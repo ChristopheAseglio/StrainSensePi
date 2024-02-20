@@ -1,4 +1,4 @@
-#import numpy as np
+import numpy as np
 import time
 import board
 import adafruit_ads1x15.ads1115 as ADS
@@ -26,19 +26,17 @@ NUM_READINGS = 100 #Nombre de readings pour faire une moyenne (bruit)
 THINGSBOARD_HOST = os.getenv("THINGSBOARD_HOST")
 ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
 
-# def apply_gaussian_filter(readings, sigma=2):
-#     # Convertit les lectures en un tableau numpy pour le traitement
-#     dv_values = np.array([dv for dv, _, _ in readings])
-#     v_values = np.array([v for _, v, _ in readings])
-#     strain_values = np.array([strain for _, _, strain in readings])
-
-#     # Applique le filtre gaussien pour lisser les données 
-    
-#     smoothed_dv = gaussian_filter1d(dv_values, sigma=sigma)
-#     smoothed_v = gaussian_filter1d(v_values, sigma=sigma)
-#     smoothed_strain = gaussian_filter1d(strain_values, sigma=sigma)
-
-#     return smoothed_dv, smoothed_v, smoothed_strain
+#filtre les outliers (données abérantes)
+def outliers_iqr(ys):
+    # Calcule le premier et le troisième quartile des datas
+    quartile_1, quartile_3 = np.percentile(ys, [25, 75])
+    # Calcule l'écart interquartile (IQR)
+    iqr = quartile_3 - quartile_1
+    # Définit les bornes inférieure et supérieure pour détecter les outliers
+    lower_bound = quartile_1 - (iqr * 1.5)
+    upper_bound = quartile_3 + (iqr * 1.5)
+    # Retourne les indices des valeurs qui sont en dehors des bornes définies
+    return np.where((ys > upper_bound) | (ys < lower_bound))
 
 baseline_strains = {} # Pour stocker les mesures zéro
 
@@ -209,29 +207,55 @@ def main():
         while True:
             sensor_data = {}
             for ads in ads_devices: 
+                # Collecte les readings de chaque ADS
                 readings = collect_readings(ads)
-                average_values = calculate_average(readings)
+                
+                # Converti les readings en un tableau 
+                readings_array = np.array(readings, dtype=float)
 
-                # extrait la déformation moyenne depuis average_values
-                average_dv, average_v, average_strain = average_values
+                # Extrait les strains du tableau
+                strain_values = readings_array[:, 2]  
 
-                # ajuste la déformation moyenne en fonction de la mesure de base (mesure zéro)
+                # Identifie les outliers avec la fonction IQR
+                outlier_indices = outliers_iqr(strain_values)[0]  
+
+                # Compte le nombre d'outliers identifiés
+                num_outliers = len(outlier_indices)
+                total_readings = len(strain_values)
+                # Log le nombre et le pourcentage d'outliers
+                logger.info(f"Identifiés {num_outliers} valeurs aberrantes sur {total_readings} lectures. {(num_outliers/total_readings)*100:.2f}% des lectures sont des valeurs aberrantes.")
+
+                # Filtre les readings pour éliminer les outliers
+                filtered_readings = np.delete(readings_array, outlier_indices, axis=0)
+
+                # Check s'il reste des datas après le filtrage des outliers
+                if filtered_readings.size == 0:
+                    logger.warning("Tous les readings ont été identifiés comme outliers ou aucun reading disponible.")
+                    continue
+
+                # Calcule les moyennes de DV, V, et strain à partir des readings filtrés
+                average_dv, average_v, average_strain = calculate_average(filtered_readings.tolist())
+
+                # Ajuste la moyenne de déformation en fonction de la mesure de base (mesure zéro)
                 adjusted_strain = adjust_for_baseline(average_strain, baseline_strains, ads["tca_address"], ads["channel"])
 
-                # On print les valeurs ajustées
+                # Affiche les valeurs ajustées
                 print_strain_values((average_dv, average_v, adjusted_strain), ads["tca_address"], ads["channel"], previous_strains)
-                
-                # Prépa des données pour l'envoi, avec la déformation ajustée
+                        
+                # Prépare les données pour l'envoi, avec la déformation ajustée
                 sensor_data[f"TCA{hex(ads['tca_address'])}_CH{ads['channel']}"] = {
                     'Average DV': average_dv,
                     'Average V': average_v,
-                    'Average Strain': adjusted_strain  # Utilise la déformation ajustée ici
+                    'Average Strain': adjusted_strain
                 }
+                
                 logger.info(sensor_data)
 
-            # Publication des données ajustées
+            # Publie les données ajustées sur la plateform IoT
             publish_to_cloud(mqtt_client, sensor_data)
+            # Attend avant la prochaine itération
             time.sleep(INTERVAL)
+
 
     except KeyboardInterrupt:
         logger.error("Programme terminé par l'utilisateur.")
@@ -240,61 +264,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-##############################################################################################
-######################### Main avec fonction filtre gaussienne ###############################
-##############################################################################################
-
-# def main():
-#     logger.info('Initialisation terminée')
-#     previous_strains = {}
-#     mqtt_client = initialize_mqtt_client()
-
-#     try:
-#         i2c = board.I2C()
-#         tcas_with_addresses = initialize_tcas(i2c, TCA_ADDRESSES)
-#         ads_devices = initialize_ads_devices(tcas_with_addresses)
-        
-#         # Capture des mesures zéro
-#         baseline_strains = capture_baseline(ads_devices)    
-
-#         while True:
-#             sensor_data = {}
-#             for ads in ads_devices: 
-#                 readings = collect_readings(ads)
-#                 average_values = calculate_average(readings)
-
-#                 # J'applique le filtre gaussien ici avec sigma^2 comme variance. sigma est l'écart-type, donc pour sigma^2 j'utilise la racine carrée de la variance.
-#                 sigma_squared = 4  # variance sigma²
-#                 sigma = np.sqrt(sigma_squared)
-#                 smoothed_readings_dv, smoothed_readings_v, smoothed_readings_strain = apply_gaussian_filter(readings, sigma=sigma)
-
-#                 # Recalculez les moyennes après le lissage
-#                 average_dv_smoothed = np.mean(smoothed_readings_dv)
-#                 average_v_smoothed = np.mean(smoothed_readings_v)
-#                 average_strain_smoothed = np.mean(smoothed_readings_strain)
-
-#                 # Ajuste la déformation moyenne en fonction de la mesure de base (mesure zéro)
-#                 adjusted_strain = adjust_for_baseline(average_strain_smoothed, baseline_strains, ads["tca_address"], ads["channel"])
-
-#                 # On print les valeurs ajustées
-#                 print_strain_values((average_dv_smoothed, average_v_smoothed, adjusted_strain), ads["tca_address"], ads["channel"], previous_strains)
-                
-#                 # Prépa des données pour l'envoi, avec la déformation ajustée
-#                 sensor_data[f"TCA{hex(ads['tca_address'])}_CH{ads['channel']}"] = {
-#                     'Average DV': average_dv_smoothed,
-#                     'Average V': average_v_smoothed,
-#                     'Average Strain': adjusted_strain  # Utilise la déformation ajustée ici
-#                 }
-
-#             logger.info(sensor_data)
-#             # Publication des données ajustées
-#             publish_to_cloud(mqtt_client, sensor_data)
-#             time.sleep(INTERVAL)
-
-#     except KeyboardInterrupt:
-#         logger.error("Programme terminé par l'utilisateur.")
-#     except Exception as e:
-#         logger.error(f"Erreur inattendue : {e}")
-
-# if __name__ == "__main__":
-#     main()
