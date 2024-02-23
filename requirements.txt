@@ -1,0 +1,5 @@
+numpy
+adafruit-circuitpython-ads1x15
+adafruit-circuitpython-tca9548a
+paho-mqtt
+python-dotenv
