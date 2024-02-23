@@ -16,10 +16,10 @@ logger = logging.getLogger("thingsboard")
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 # Constantes
-TCA_ADDRESSES = [0x70,0x71,0x72]  # Il suffit d'ajouter l'adresse des TCAs supplémentaires
-INTERVAL = 5  # Intervalle de capture en sec
+TCA_ADDRESSES = [0x70]#,0x71,0x72]  # Il suffit d'ajouter l'adresse des TCAs supplémentaires
+INTERVAL = 0  # Intervalle de capture en sec
 LOG_FORMAT = "%(levelname)s:%(asctime)s:%(message)s"
-NUM_READINGS = 100 #Nombre de readings pour faire une moyenne (bruit)
+NUM_READINGS = 50 #Nombre de readings pour faire une moyenne (bruit)
 
 # Constantes MQTT
 THINGSBOARD_HOST = os.getenv("THINGSBOARD_HOST")
@@ -32,8 +32,8 @@ def outliers_iqr(ys):
     # Calcule l'écart interquartile (IQR)
     iqr = quartile_3 - quartile_1
     # Définit les bornes inférieure et supérieure pour détecter les outliers
-    lower_bound = quartile_1 - (iqr * 1.5)
-    upper_bound = quartile_3 + (iqr * 1.5)
+    lower_bound = quartile_1 - (iqr * 1.0) #plus le multiple est bas, plus cela réduit la plage acceptable pour les données non aberrantes
+    upper_bound = quartile_3 + (iqr * 1.0) # + bas = + strict
     # Retourne les indices des valeurs qui sont en dehors des bornes définies
     return np.where((ys > upper_bound) | (ys < lower_bound))
 
@@ -207,6 +207,7 @@ def main():
 
         while True:
             sensor_data = {}
+            tic = time.time()
             for ads in ads_devices: 
                 # Collecte les readings de chaque ADS
                 readings = collect_readings(ads)
@@ -239,7 +240,8 @@ def main():
 
                 # Ajuste la moyenne de déformation en fonction de la mesure de base (mesure zéro)
                 adjusted_strain = adjust_for_baseline(average_strain, baseline_strains, ads["tca_address"], ads["channel"])
-
+                if (adjusted_strain > 10000) : 
+                    logger.warning(f"{strain_values} : {average_strain}")
                 # Affiche les valeurs ajustées
                 print_strain_values((average_dv, average_v, adjusted_strain), ads["tca_address"], ads["channel"], previous_strains)
                         
@@ -254,6 +256,9 @@ def main():
 
             # Publie les données ajustées sur la plateform IoT
             publish_to_cloud(mqtt_client, sensor_data)
+            toc = time.time()
+            etime = toc-tic
+            print(f'elapsed time {etime}')
             # Attend avant la prochaine itération
             time.sleep(INTERVAL)
 
